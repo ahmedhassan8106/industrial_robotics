@@ -54,23 +54,11 @@ static const char *trajectory_topics[GROUP_COUNT] = {
 };
 
 static const double lower_limits[JOINT_COUNT] = {
-    -3.1416,
-    -1.5708,
-    -2.0944,
-    -3.1416,
-    -1.5708,
-     0.0,
-    -0.5236
+    -1.57079632679, -1.57079632679, -1.57079632679, -3.14159265359, 0.0, 0.0, -0.5236
 };
 
 static const double upper_limits[JOINT_COUNT] = {
-     3.1416,
-     1.5708,
-     2.0944,
-     3.1416,
-     1.5708,
-     0.5236,
-     0.0
+    1.57079632679, 1.57079632679, 1.57079632679, 3.14159265359, 3.14159265359, 0.5236, 0.0
 };
 
 /* Latest requested position for every joint */
@@ -181,7 +169,7 @@ static void joint_target_callback(const void *message)
         return;
     }
 
-    bool valid_update = false;
+    bool changed[GROUP_COUNT] = {false};
 
     for (size_t i = 0; i < targets->name.size; i++) {
         const char *name = targets->name.data[i].data;
@@ -202,8 +190,11 @@ static void joint_target_callback(const void *message)
                     position = upper_limits[j];
                 }
 
+                if (fabs(position - requested_positions[j]) <= 1e-6) {
+                    break;
+                }
                 requested_positions[j] = position;
-                valid_update = true;
+                changed[j < 5 ? 0 : 1] = true;
 
                 /*
                  * Preserve existing Gazebo control.
@@ -224,15 +215,12 @@ static void joint_target_callback(const void *message)
         }
     }
 
-    if (!valid_update) {
-        return;
+    if (changed[0]) {
+        publish_group_trajectory(0, 0, 5);
     }
-
-    /* ROS 2 Control: arm group */
-    publish_group_trajectory(0, 0, 5);
-
-    /* ROS 2 Control: gripper group */
-    publish_group_trajectory(1, 5, 2);
+    if (changed[1]) {
+        publish_group_trajectory(1, 5, 2);
+    }
 }
 
 int main(int argc, const char *argv[])

@@ -6,11 +6,17 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     IncludeLaunchDescription,
+    DeclareLaunchArgument,
+    OpaqueFunction,
+    RegisterEventHandler,
+    LogInfo,
     SetEnvironmentVariable,
     TimerAction,
 )
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 
+from launch.event_handlers import OnProcessExit
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 import xacro
@@ -19,10 +25,23 @@ import xacro
 # True  = ROS 2 Control (use this with MoveIt2 / RViz)
 # False = Original Gazebo JointPositionControllers + sliders
 
-USE_ROS2_CONTROL = True
+# UNIFIED_SLIDER_INTEGRATION
 
 
 def generate_launch_description():
+    return LaunchDescription([
+        DeclareLaunchArgument('use_ros2_control', default_value='true',
+                              choices=['true', 'false']),
+        DeclareLaunchArgument('manual_sliders', default_value='false',
+                              choices=['true', 'false']),
+        OpaqueFunction(function=_launch_setup),
+    ])
+
+
+def _launch_setup(context):
+    use_ros2_control = LaunchConfiguration('use_ros2_control').perform(context) == 'true'
+    manual_sliders = LaunchConfiguration('manual_sliders').perform(context) == 'true'
+
 
 
 
@@ -38,7 +57,7 @@ def generate_launch_description():
         str(share / 'urdf' / 'simulation.urdf.xacro'),
         mappings={
             'gazebo': 'true',
-            'ros2_control': 'true' if USE_ROS2_CONTROL else 'false'
+            'ros2_control': 'true' if use_ros2_control else 'false'
         }
     ).toxml()
 
@@ -88,7 +107,7 @@ def generate_launch_description():
     )
 
 
-    if USE_ROS2_CONTROL:
+    if use_ros2_control:
         # ros2_control publishes /joint_states itself.
         # Bridge only the simulation clock.
         bridge = Node(
@@ -123,46 +142,10 @@ def generate_launch_description():
 
 
 
-    if not USE_ROS2_CONTROL:
+    if not use_ros2_control:
+        actions += _manual_slider_actions(description)
 
-        slider_controller = Node(
-            package='robot_c',
-            executable='slider_to_gazebo_c',
-            name='slider_to_gazebo_c',
-            output='screen'
-        )
-
-        rviz_sliders = Node(
-            package='joint_state_publisher_gui',
-            executable='joint_state_publisher_gui',
-            name='joint_state_publisher_gui',
-            parameters=[{
-                'robot_description': description,
-                'rate': 20,
-                'source_list': ['/gazebo_slider_targets']
-            }],
-            remappings=[
-                ('/joint_states', '/slider_joint_targets')
-            ],
-            output='screen'
-        )
-
-        gazebo_sliders = Node(
-            package='robot_c',
-            executable='gazebo_slider_panel_c',
-            name='gazebo_slider_panel_c',
-            output='screen'
-        )
-
-        actions += [
-            slider_controller,
-            rviz_sliders,
-            gazebo_sliders,
-        ]
-
-
-
-    if USE_ROS2_CONTROL:
+    if use_ros2_control:
 
         # The Gazebo plugin creates controller_manager.
         # This spawner loads and activates all controllers
@@ -189,6 +172,19 @@ def generate_launch_description():
             output='screen'
         )
 
+        if manual_sliders:
+            def on_controllers_ready(event, context):
+                if event.returncode != 0:
+                    return [LogInfo(msg='Controller startup failed: sliders not started.')]
+                if context.is_shutdown:
+                    return []
+                return _manual_slider_actions(description)
+
+            actions.append(RegisterEventHandler(OnProcessExit(
+                target_action=controller_spawner,
+                on_exit=on_controllers_ready,
+            )))
+
         actions.append(
             TimerAction(
                 period=5.0,
@@ -197,4 +193,37 @@ def generate_launch_description():
         )
 
 
-    return LaunchDescription(actions)
+    return actions
+
+
+def _manual_slider_actions(description):
+    slider_controller = Node(
+        package='robot_c',
+        executable='slider_to_gazebo_c',
+        name='slider_to_gazebo_c',
+        output='screen'
+    )
+
+    rviz_sliders = Node(
+        package='joint_state_publisher_gui',
+        executable='joint_state_publisher_gui',
+        name='joint_state_publisher_gui',
+        parameters=[{
+            'robot_description': description,
+            'rate': 20,
+            'source_list': ['/gazebo_slider_targets']
+        }],
+        remappings=[
+            ('/joint_states', '/slider_joint_targets')
+        ],
+        output='screen'
+    )
+
+    gazebo_sliders = Node(
+        package='robot_c',
+        executable='gazebo_slider_panel_c',
+        name='gazebo_slider_panel_c',
+        output='screen'
+    )
+
+    return [slider_controller, rviz_sliders, gazebo_sliders]
