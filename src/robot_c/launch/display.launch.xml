@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<launch>
+
+  <include file="$(find-pkg-share urdf_launch)/launch/display.launch.py">
+
+    <arg name="urdf_package" value="robot_c"/>
+
+    <arg name="urdf_package_path" value="urdf/simulation.urdf"/>
+
+    <arg name="rviz_config"
+         value="$(find-pkg-share robot_c)/config/arm.rviz"/>
+
+    <arg name="jsp_gui" value="true"/>
+
+  </include>
+
+</launch>
+

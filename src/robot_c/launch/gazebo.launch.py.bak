@@ -1,0 +1,202 @@
+import os
+from pathlib import Path
+
+from ament_index_python.packages import get_package_share_directory
+
+from launch import LaunchDescription
+from launch.actions import (
+    IncludeLaunchDescription,
+    SetEnvironmentVariable,
+)
+
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+
+from launch_ros.actions import Node
+
+import xacro
+
+
+def generate_launch_description():
+
+    # =====================================================
+    # 1. PACKAGE PATHS
+    # =====================================================
+
+    share = Path(
+        get_package_share_directory('robot_c')
+    )
+
+    gz_share = Path(
+        get_package_share_directory('ros_gz_sim')
+    )
+
+    world = share / 'worlds' / 'milestone.sdf'
+
+    rviz_config = share / 'config' / 'arm.rviz'
+
+    bridge_config = share / 'config' / 'bridge.yaml'
+
+
+    # =====================================================
+    # 2. ROBOT DESCRIPTION
+    # =====================================================
+
+    # Enable Gazebo plugins without changing robot geometry
+    description = xacro.process_file(
+        str(share / 'urdf' / 'simulation.urdf.xacro'),
+        mappings={
+            'gazebo': 'true'
+        }
+    ).toxml()
+
+
+    # =====================================================
+    # 3. LAUNCH ALL COMPONENTS
+    # =====================================================
+
+    return LaunchDescription([
+
+        # ---------------------------------------------
+        # GAZEBO RESOURCE PATH
+        # ---------------------------------------------
+
+        SetEnvironmentVariable(
+            name='GZ_SIM_RESOURCE_PATH',
+            value=(
+                str(share.parent)
+                + os.pathsep
+                + os.environ.get('GZ_SIM_RESOURCE_PATH', '')
+            )
+        ),
+
+
+        # ---------------------------------------------
+        # START GAZEBO HARMONIC
+        # ---------------------------------------------
+
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                str(gz_share / 'launch' / 'gz_sim.launch.py')
+            ),
+            launch_arguments={
+                'gz_args': '-r "' + str(world) + '"'
+            }.items()
+        ),
+
+
+        # ---------------------------------------------
+        # ROBOT STATE PUBLISHER
+        # ---------------------------------------------
+
+        Node(
+            package='robot_state_publisher',
+            executable='robot_state_publisher',
+            name='robot_state_publisher',
+            parameters=[{
+                'robot_description': description,
+                'use_sim_time': True
+            }],
+            output='screen'
+        ),
+
+
+        # ---------------------------------------------
+        # SPAWN ROBOT IN GAZEBO
+        # ---------------------------------------------
+
+        Node(
+            package='ros_gz_sim',
+            executable='create',
+            name='create_robot',
+            arguments=[
+                '-world', 'milestone',
+                '-name', 'simulation',
+                '-topic', 'robot_description'
+            ],
+            output='screen'
+        ),
+
+
+        # ---------------------------------------------
+        # ROS 2 ↔ GAZEBO BRIDGE
+        # ---------------------------------------------
+
+        Node(
+            package='ros_gz_bridge',
+            executable='parameter_bridge',
+            name='ros_gz_bridge',
+            parameters=[{
+                'config_file': str(bridge_config)
+            }],
+            output='screen'
+        ),
+
+
+        # ---------------------------------------------
+        # START RVIZ
+        # ---------------------------------------------
+
+        Node(
+            package='rviz2',
+            executable='rviz2',
+            name='rviz2',
+            arguments=[
+                '-d',
+                str(rviz_config)
+            ],
+            parameters=[{
+                'use_sim_time': True
+            }],
+            output='screen'
+        ),
+
+
+        # ---------------------------------------------
+        # C JOINT CONTROLLER
+        # ---------------------------------------------
+
+        Node(
+            package='robot_c',
+            executable='slider_to_gazebo_c',
+            name='slider_to_gazebo_c',
+            output='screen'
+        ),
+
+
+        # ---------------------------------------------
+        # ORIGINAL RVIZ JOINT SLIDERS
+        # ---------------------------------------------
+
+        Node(
+            package='joint_state_publisher_gui',
+            executable='joint_state_publisher_gui',
+            name='joint_state_publisher_gui',
+            parameters=[{
+                'robot_description': description,
+                'rate': 20,
+                'source_list': [
+                    '/gazebo_slider_targets'
+                ]
+            }],
+            remappings=[
+                (
+                    '/joint_states',
+                    '/slider_joint_targets'
+                )
+            ],
+            output='screen'
+        ),
+
+
+        # ---------------------------------------------
+        # NEW GAZEBO JOINT SLIDERS IN C
+        # ---------------------------------------------
+
+        Node(
+            package='robot_c',
+            executable='gazebo_slider_panel_c',
+            name='gazebo_slider_panel_c',
+            output='screen'
+        ),
+
+    ])
